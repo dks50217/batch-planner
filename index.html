@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="utf-8" />
+  <title>批次規劃器</title>
+  <style>
+    *{box-sizing:border-box;font-family:system-ui, sans-serif}
+    body{margin:0;padding:2rem;background:#f5f6fa}
+    h1{margin-top:0}
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1rem}
+    .card{background:#fff;padding:1.2rem 1.5rem;border-radius:1rem;box-shadow:0 4px 18px rgba(0,0,0,.07)}
+    label{display:block;margin-top:.75rem;margin-bottom:.25rem;font-weight:600}
+    select,input[type="number"],input[type="text"]{width:100%;padding:.5rem .6rem;border:1px solid #cfd2dc;border-radius:.5rem;font-size:1rem}
+    button{padding:.45rem 1rem;border:none;border-radius:.55rem;font-size:1rem;font-weight:600;cursor:pointer;transition:background .2s ease}
+    button.primary{background:#007aff;color:#fff}
+    button.danger{background:#ff3b30;color:#fff}
+    button:disabled{background:#9bc2ff;cursor:not-allowed}
+    table{width:100%;border-collapse:collapse;margin-top:1rem}
+    th,td{padding:.45rem .4rem;text-align:left;border-bottom:1px solid #e2e4ea;font-size:.95rem}
+    th{background:#fafafa;font-weight:700}
+    .batch-title{margin:.75rem 0 .25rem;font-weight:700}
+  </style>
+</head>
+<body>
+  <h1>批次規劃器</h1>
+
+  <div class="grid">
+    <!-- 輸入卡片 -->
+    <div class="card">
+      <h2>新增品項</h2>
+      <label for="category">類別</label>
+      <select id="category" required>
+        <option value="" selected disabled>請選擇</option>
+        <option value="drug">藥品</option>
+        <option value="supplement">保健品</option>
+        <option value="quasi">醫藥部外品</option>
+      </select>
+
+      <label for="name">商品名稱</label>
+      <input id="name" type="text" placeholder="例如 A1" required />
+
+      <label for="qty">數量 (盒/罐)</label>
+      <input id="qty" type="number" min="1" step="1" placeholder="僅輸入數字" required />
+
+      <button id="addBtn" class="primary" style="margin-top:1rem;width:100%">加入列表</button>
+    </div>
+
+    <!-- 列表卡片 -->
+    <div class="card" style="grid-column:span 2">
+      <h2>目前輸入的品項</h2>
+      <table id="itemTable">
+        <thead>
+          <tr><th>#</th><th>類別</th><th>名稱</th><th>數量</th><th>操作</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 分批結果 -->
+  <div class="card" style="margin-top:2rem">
+    <h2>分批結果</h2>
+    <div id="batchResult">尚未輸入品項</div>
+  </div>
+
+<script>
+// ---------- 規則常數 ----------
+const CATEGORY_LABEL = {drug:"藥品", supplement:"保健品", quasi:"醫藥部外品"};
+const SKU_LIMIT = {drug:2, supplement:12, quasi:10};   // 同款單批上限
+const DRUG_SKU_PER_BATCH = 6;                          // 一批最多 6 種藥品
+
+// ---------- 狀態 ----------
+const items = []; // {category,name,qty}
+
+// ---------- DOM ----------
+const elCat  = document.getElementById("category");
+const elName = document.getElementById("name");
+const elQty  = document.getElementById("qty");
+const addBtn = document.getElementById("addBtn");
+const tbody  = document.querySelector("#itemTable tbody");
+const batchDiv = document.getElementById("batchResult");
+
+// ---------- 新增品項 ----------
+addBtn.addEventListener("click", () => {
+  const cat = elCat.value;
+  const name = elName.value.trim();
+  const qty = parseInt(elQty.value, 10);
+
+  if(!cat){alert("請選擇類別"); return;}
+  if(!name){alert("請輸入商品名稱"); return;}
+  if(!qty || qty < 1){alert("數量必須為正整數"); return;}
+
+  items.push({category:cat, name, qty});
+  renderItemTable();
+  computeAndRenderBatches();
+
+  // reset form
+  elCat.value="";
+  elName.value="";
+  elQty.value="";
+});
+
+// ---------- 刪除功能 ----------
+tbody.addEventListener("click", e => {
+  if(e.target.matches("button[data-index]")){
+    const idx = parseInt(e.target.dataset.index, 10);
+    if(!isNaN(idx)){
+      items.splice(idx, 1);
+      renderItemTable();
+      computeAndRenderBatches();
+    }
+  }
+});
+
+// ---------- UI Render ----------
+function renderItemTable(){
+  if(items.length === 0){
+    tbody.innerHTML = "";
+    return;
+  }
+  tbody.innerHTML = items.map((it,i)=>
+    `<tr>
+       <td>${i+1}</td>
+       <td>${CATEGORY_LABEL[it.category]}</td>
+       <td>${it.name}</td>
+       <td>${it.qty}</td>
+       <td><button class="danger" data-index="${i}">刪除</button></td>
+     </tr>`
+  ).join("");
+}
+
+function computeAndRenderBatches(){
+  if(items.length === 0){ batchDiv.textContent = "尚未輸入品項"; return; }
+  const batches = splitIntoBatches(items);
+  let html = "";
+  batches.forEach((batch, idx) => {
+    html += `<div class="batch-title">Batch #${idx+1}</div>`;
+    html += `<table><thead><tr><th>類別</th><th>名稱</th><th>數量</th></tr></thead><tbody>`;
+    batch.items.forEach(it => {
+      html += `<tr><td>${CATEGORY_LABEL[it.category]}</td><td>${it.name}</td><td>${it.qty}</td></tr>`;
+    });
+    html += `</tbody></table>`;
+  });
+  batchDiv.innerHTML = html;
+}
+
+// ---------- 批次演算法 ----------
+function splitIntoBatches(src){
+  const queue = src.map(o=>({...o})); // shallow copy
+  const batches=[];
+
+  class Batch{
+    constructor(){
+      this.items=[];
+      this.drugUnits=0;
+      this.supUnits=0;
+      this.drugSkuSet=new Set();
+    }
+    existingQty(cat,name){
+      const f=this.items.find(x=>x.category===cat && x.name===name);
+      return f?f.qty:0;
+    }
+    canAdd(cat,name,amt){
+      if(this.existingQty(cat,name)+amt>SKU_LIMIT[cat]) return false;
+      if(cat==="drug" && !this.drugSkuSet.has(name) && this.drugSkuSet.size>=DRUG_SKU_PER_BATCH) return false;
+      const potDrug=this.drugUnits+(cat==="drug"?amt:0);
+      const potSup =this.supUnits +(cat==="supplement"?amt:0);
+      if(potDrug>0 && potSup>0 && (potDrug+potSup)>48) return false;
+      return true;
+    }
+    add(cat,name,amt){
+      const f=this.items.find(x=>x.category===cat && x.name===name);
+      if(f) f.qty+=amt; else this.items.push({category:cat,name,qty:amt});
+      if(cat==="drug"){this.drugUnits+=amt; this.drugSkuSet.add(name);} 
+      if(cat==="supplement") this.supUnits+=amt;
+    }
+  }
+
+  queue.forEach(item=>{
+    let remaining=item.qty;
+    const perLimit=SKU_LIMIT[item.category];
+    while(remaining>0){
+      let chunk=Math.min(remaining,perLimit);
+      let placed=false;
+
+      for(const batch of batches){
+        const allowed=perLimit-batch.existingQty(item.category,item.name);
+        const tryAmt=Math.min(chunk,allowed);
+        if(tryAmt>0 && batch.canAdd(item.category,item.name,tryAmt)){
+          batch.add(item.category,item.name,tryAmt);
+          remaining-=tryAmt;
+          placed=true;
+          if(remaining===0) break;
+          chunk=Math.min(remaining,perLimit);
+        }
+      }
+      if(!placed){
+        const newB=new Batch();
+        const amt=Math.min(remaining,perLimit);
+        newB.add(item.category,item.name,amt);
+        batches.push(newB);
+        remaining-=amt;
+      }
+    }
+  });
+  return batches;
+}
+</script>
+</body>
+</html>
