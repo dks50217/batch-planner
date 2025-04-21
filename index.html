@@ -2,9 +2,9 @@
 <html lang="zh-TW">
 <head>
   <meta charset="utf-8" />
-  <title>批次規劃器</title>
+  <title>Batch Planner 批次規劃器</title>
   <style>
-    *{box-sizing:border-box;font-family:system-ui, sans-serif}
+    *{box-sizing:border-box;font-family:system-ui,sans-serif}
     body{margin:0;padding:2rem;background:#f5f6fa}
     h1{margin-top:0}
     .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1rem}
@@ -14,6 +14,7 @@
     button{padding:.45rem 1rem;border:none;border-radius:.55rem;font-size:1rem;font-weight:600;cursor:pointer;transition:background .2s ease}
     button.primary{background:#007aff;color:#fff}
     button.danger{background:#ff3b30;color:#fff}
+    button.secondary{background:#555;color:#fff}
     button:disabled{background:#9bc2ff;cursor:not-allowed}
     table{width:100%;border-collapse:collapse;margin-top:1rem}
     th,td{padding:.45rem .4rem;text-align:left;border-bottom:1px solid #e2e4ea;font-size:.95rem}
@@ -22,7 +23,7 @@
   </style>
 </head>
 <body>
-  <h1>批次規劃器</h1>
+  <h1>Batch Planner 批次規劃器</h1>
 
   <div class="grid">
     <!-- 輸入卡片 -->
@@ -37,27 +38,20 @@
       </select>
 
       <label for="name">商品名稱</label>
-      <input id="name" type="text" placeholder="例如 A1" required />
+      <input id="product_name" type="text" placeholder="例如 A1" required />
 
       <label for="qty">數量 (盒/罐)</label>
       <input id="qty" type="number" min="1" step="1" placeholder="僅輸入數字" required />
 
       <button id="addBtn" class="primary" style="margin-top:1rem;width:100%">加入列表</button>
-
-      <!-- 新增備註 -->
-      <div style="margin-top:1rem;font-size:0.9rem;color:#555;">
-        <strong>備註：</strong>
-        <ul style="margin:0;padding-left:1.5rem;">
-          <li>「WAKAMOTO 若元錠 / わかもと」是藥品</li>
-          <li>「朝日 ASAHI 愛表斯錠 Ebios エビオス錠」是藥品</li>
-        </ul>
-      </div>
-
     </div>
 
     <!-- 列表卡片 -->
     <div class="card" style="grid-column:span 2">
-      <h2>目前輸入的品項</h2>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h2>目前輸入的品項</h2>
+        <button id="exportItems" class="secondary">匯出列表 CSV</button>
+      </div>
       <table id="itemTable">
         <thead>
           <tr><th>#</th><th>類別</th><th>名稱</th><th>數量</th><th>操作</th></tr>
@@ -69,148 +63,121 @@
 
   <!-- 分批結果 -->
   <div class="card" style="margin-top:2rem">
-    <h2>分批結果</h2>
+   <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h2>分批結果</h2>
+        <button id="exportBatches" class="secondary">匯出分批 CSV</button> 
+   </div>
     <div id="batchResult">尚未輸入品項</div>
   </div>
 
 <script>
-// ---------- 規則常數 ----------
+// ---------------- 規則常數 ----------------
 const CATEGORY_LABEL = {drug:"藥品", supplement:"保健品", quasi:"醫藥部外品"};
-const SKU_LIMIT = {drug:2, supplement:12, quasi:10};   // 同款單批上限
-const DRUG_SKU_PER_BATCH = 6;                          // 一批最多 6 種藥品
+const SKU_LIMIT = {drug:2, supplement:12, quasi:10};
+const DRUG_SKU_PER_BATCH = 6;
+const BATCH_TOTAL_LIMIT = 48;
 
-// ---------- 狀態 ----------
-const items = []; // {category,name,qty}
+// ---------------- 狀態 ----------------
+const items = [];
+let currentBatches = [];
 
-// ---------- DOM ----------
+// ---------------- DOM ----------------
 const elCat  = document.getElementById("category");
-const elName = document.getElementById("name");
+const elName = document.getElementById("product_name");
 const elQty  = document.getElementById("qty");
 const addBtn = document.getElementById("addBtn");
 const tbody  = document.querySelector("#itemTable tbody");
 const batchDiv = document.getElementById("batchResult");
+const btnExportItems = document.getElementById("exportItems");
+const btnExportBatches = document.getElementById("exportBatches");
 
-// ---------- 新增品項 ----------
+// ---------------- 新增品項 ----------------
 addBtn.addEventListener("click", () => {
   const cat = elCat.value;
   const name = elName.value.trim();
   const qty = parseInt(elQty.value, 10);
-
-  if(!cat){alert("請選擇類別"); return;}
-  if(!name){alert("請輸入商品名稱"); return;}
-  if(!qty || qty < 1){alert("數量必須為正整數"); return;}
-
-  items.push({category:cat, name, qty});
+  if(!cat||!name||!qty||qty<1){alert("請確認所有欄位皆正確");return;}
+  items.push({category:cat,name,qty});
   renderItemTable();
   computeAndRenderBatches();
-
-  // reset form
-  elCat.value="";
-  elName.value="";
-  elQty.value="";
+  elCat.value="";elName.value="";elQty.value="";
 });
 
-// ---------- 刪除功能 ----------
-tbody.addEventListener("click", e => {
+// ---------------- 刪除功能 ----------------
+tbody.addEventListener("click", e=>{
   if(e.target.matches("button[data-index]")){
-    const idx = parseInt(e.target.dataset.index, 10);
+    const idx=parseInt(e.target.dataset.index,10);
     if(!isNaN(idx)){
-      items.splice(idx, 1);
+      items.splice(idx,1);
       renderItemTable();
       computeAndRenderBatches();
     }
   }
 });
 
-// ---------- UI Render ----------
+// ---------------- 匯出 CSV ----------------
+btnExportItems.addEventListener("click", ()=>{
+  if(items.length===0){alert("列表為空");return;}
+  const rows=[["類別","名稱","數量"],...items.map(it=>[CATEGORY_LABEL[it.category],it.name,it.qty])];
+  downloadCSV("items.csv",rows);
+});
+
+btnExportBatches.addEventListener("click", ()=>{
+  if(currentBatches.length===0){alert("尚未計算分批");return;}
+  const rows=[["Batch","類別","名稱","數量"]];
+  currentBatches.forEach((b,idx)=>{
+    b.items.forEach(it=>{
+      rows.push([`Batch #${idx+1}`,CATEGORY_LABEL[it.category],it.name,it.qty]);
+    });
+  });
+  downloadCSV("batches.csv",rows);
+});
+
+function downloadCSV(filename,rows){
+  const csvBody = rows.map(r=>r.map(s=>`"${s}"`).join(",")).join("\n");
+  const csvContent = "\uFEFF" + csvBody; // UTF‑8 BOM 防亂碼
+  const blob = new Blob([csvContent],{type:"text/csv;charset=utf-8;"});
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+// ---------------- UI Render ----------------
 function renderItemTable(){
-  if(items.length === 0){
-    tbody.innerHTML = "";
-    return;
-  }
   tbody.innerHTML = items.map((it,i)=>
-    `<tr>
-       <td>${i+1}</td>
-       <td>${CATEGORY_LABEL[it.category]}</td>
-       <td>${it.name}</td>
-       <td>${it.qty}</td>
-       <td><button class="danger" data-index="${i}">刪除</button></td>
-     </tr>`
+    `<tr><td>${i+1}</td><td>${CATEGORY_LABEL[it.category]}</td><td>${it.name}</td><td>${it.qty}</td><td><button class="danger" data-index="${i}">刪除</button></td></tr>`
   ).join("");
 }
 
 function computeAndRenderBatches(){
-  if(items.length === 0){ batchDiv.textContent = "尚未輸入品項"; return; }
-  const batches = splitIntoBatches(items);
-  let html = "";
-  batches.forEach((batch, idx) => {
-    html += `<div class="batch-title">Batch #${idx+1}</div>`;
-    html += `<table><thead><tr><th>類別</th><th>名稱</th><th>數量</th></tr></thead><tbody>`;
-    batch.items.forEach(it => {
-      html += `<tr><td>${CATEGORY_LABEL[it.category]}</td><td>${it.name}</td><td>${it.qty}</td></tr>`;
-    });
-    html += `</tbody></table>`;
+  if(items.length===0){batchDiv.textContent="尚未輸入品項";currentBatches=[];return;}
+  currentBatches = splitIntoBatches(items);
+  let html="";
+  currentBatches.forEach((b,idx)=>{
+    html+=`<div class="batch-title">Batch #${idx+1} (共 ${b.totalUnits} 盒)</div><table><thead><tr><th>類別</th><th>名稱</th><th>數量</th></tr></thead><tbody>`;
+    b.items.forEach(it=>{html+=`<tr><td>${CATEGORY_LABEL[it.category]}</td><td>${it.name}</td><td>${it.qty}</td></tr>`;});
+    html+=`</tbody></table>`;
   });
-  batchDiv.innerHTML = html;
+  batchDiv.innerHTML=html;
 }
 
-// ---------- 批次演算法 ----------
+// ---------------- 切批演算法 ----------------
 function splitIntoBatches(src){
-  const queue = src.map(o=>({...o})); // shallow copy
+  const queue=src.map(o=>({...o}));
   const batches=[];
-
   class Batch{
-    constructor(){
-      this.items=[];
-      this.drugUnits=0;
-      this.supUnits=0;
-      this.drugSkuSet=new Set();
-    }
-    existingQty(cat,name){
-      const f=this.items.find(x=>x.category===cat && x.name===name);
-      return f?f.qty:0;
-    }
-    canAdd(cat,name,amt){
-      if(this.existingQty(cat,name)+amt>SKU_LIMIT[cat]) return false;
-      if(cat==="drug" && !this.drugSkuSet.has(name) && this.drugSkuSet.size>=DRUG_SKU_PER_BATCH) return false;
-      const potDrug=this.drugUnits+(cat==="drug"?amt:0);
-      const potSup =this.supUnits +(cat==="supplement"?amt:0);
-      if(potDrug>0 && potSup>0 && (potDrug+potSup)>48) return false;
-      return true;
-    }
-    add(cat,name,amt){
-      const f=this.items.find(x=>x.category===cat && x.name===name);
-      if(f) f.qty+=amt; else this.items.push({category:cat,name,qty:amt});
-      if(cat==="drug"){this.drugUnits+=amt; this.drugSkuSet.add(name);} 
-      if(cat==="supplement") this.supUnits+=amt;
-    }
+    constructor(){this.items=[];this.totalUnits=0;this.drugSkuSet=new Set();}
+    existingQty(c,n){const f=this.items.find(x=>x.category===c&&x.name===n);return f?f.qty:0;}
+    canAdd(c,n,a){if(this.existingQty(c,n)+a>SKU_LIMIT[c])return false;if(c==="drug"&&!this.drugSkuSet.has(n)&&this.drugSkuSet.size>=DRUG_SKU_PER_BATCH)return false;if(this.totalUnits+a>BATCH_TOTAL_LIMIT)return false;return true;}
+    add(c,n,a){const f=this.items.find(x=>x.category===c&&x.name===n);f?f.qty+=a:this.items.push({category:c,name:n,qty:a});if(c==="drug")this.drugSkuSet.add(n);this.totalUnits+=a;}
   }
-
-  queue.forEach(item=>{
-    let remaining=item.qty;
-    const perLimit=SKU_LIMIT[item.category];
-    while(remaining>0){
-      let chunk=Math.min(remaining,perLimit);
-      let placed=false;
-
-      for(const batch of batches){
-        const allowed=perLimit-batch.existingQty(item.category,item.name);
-        const tryAmt=Math.min(chunk,allowed);
-        if(tryAmt>0 && batch.canAdd(item.category,item.name,tryAmt)){
-          batch.add(item.category,item.name,tryAmt);
-          remaining-=tryAmt;
-          placed=true;
-          if(remaining===0) break;
-          chunk=Math.min(remaining,perLimit);
-        }
-      }
-      if(!placed){
-        const newB=new Batch();
-        const amt=Math.min(remaining,perLimit);
-        newB.add(item.category,item.name,amt);
-        batches.push(newB);
-        remaining-=amt;
-      }
+  queue.forEach(it=>{
+    let rem=it.qty;const per=SKU_LIMIT[it.category];
+    while(rem>0){let chunk=Math.min(rem,per);let placed=false;
+      for(const b of batches){const allowed=Math.min(per-b.existingQty(it.category,it.name),BATCH_TOTAL_LIMIT-b.totalUnits,chunk);if(allowed>0&&b.canAdd(it.category,it.name,allowed)){b.add(it.category,it.name,allowed);rem-=allowed;placed=true;break;}}
+      if(!placed){const b=new Batch();const amt=Math.min(per,rem,BATCH_TOTAL_LIMIT);b.add(it.category,it.name,amt);batches.push(b);rem-=amt;}
     }
   });
   return batches;
