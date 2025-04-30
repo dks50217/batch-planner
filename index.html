@@ -203,10 +203,9 @@ function computeAndRenderBatches(){
 
 // ---------------- 切批演算法 ----------------
 function splitIntoBatches(src) {
-
   const chunks = [];
 
-  // 拆成 SKU 限制小段
+  // Step 1: 依單批 SKU 限制先拆分
   for (const item of src) {
     let qtyLeft = item.qty;
     const max = SKU_LIMIT[item.category];
@@ -220,19 +219,18 @@ function splitIntoBatches(src) {
     }
   }
 
-  // 於藥品類別，先做打散排序
+  // Step 2: 藥品打散排序
   const drugChunks = chunks.filter(c => c.category === "drug");
   const supplementChunks = chunks.filter(c => c.category === "supplement");
   const quasiChunks = chunks.filter(c => c.category === "quasi");
 
-  // 為藥品打散排序避免連續重複
   drugChunks.sort((a, b) => a.name.localeCompare(b.name));
-  const interleavedDrugs = [];
   const drugMap = new Map();
   for (const d of drugChunks) {
     if (!drugMap.has(d.name)) drugMap.set(d.name, []);
     drugMap.get(d.name).push(d);
   }
+  const interleavedDrugs = [];
   while (drugMap.size > 0) {
     for (const [key, arr] of drugMap) {
       interleavedDrugs.push(arr.shift());
@@ -241,22 +239,36 @@ function splitIntoBatches(src) {
   }
 
   const finalChunks = [...interleavedDrugs, ...supplementChunks, ...quasiChunks];
-
   const batches = [];
 
   function canAddToBatch(batch, chunk) {
     const { category, name, qty } = chunk;
+
+    // 批次數量上限
     if (batch.totalUnits + qty > BATCH_TOTAL_LIMIT) return false;
-    if (batch.category && batch.category !== category) return false;
+
+    // 分類限制：藥品不可與保健品同批
+    if (batch.category) {
+      if ((batch.category === "drug" && category === "supplement") ||
+          (batch.category === "supplement" && category === "drug")) {
+        return false;
+      }
+    }
+
+    const existing = batch.items.find(i => i.name === name);
+
+    // 藥品規則
     if (category === "drug") {
-      const skuSet = new Set(batch.items.map(i => i.name));
-      const existing = batch.items.find(i => i.name === name);
+      const skuSet = new Set(batch.items.filter(i => i.category === "drug").map(i => i.name));
       if (!existing && skuSet.size >= DRUG_SKU_PER_BATCH) return false;
       if (existing && existing.qty + qty > SKU_LIMIT[category]) return false;
+      if (!existing && qty > SKU_LIMIT[category]) return false;
     } else {
-      const existing = batch.items.find(i => i.name === name);
+      // 其他類別
       if (existing && existing.qty + qty > SKU_LIMIT[category]) return false;
+      if (!existing && qty > SKU_LIMIT[category]) return false;
     }
+
     return true;
   }
 
@@ -268,10 +280,12 @@ function splitIntoBatches(src) {
       batch.items.push({ ...chunk });
     }
     batch.totalUnits += chunk.qty;
+
+    // 設定類別為主分類（第一次加入）
     if (!batch.category) batch.category = chunk.category;
   }
 
-  // Step 3: 打包
+  // Step 3: 分批
   for (const chunk of finalChunks) {
     let placed = false;
     for (const batch of batches) {
@@ -281,6 +295,8 @@ function splitIntoBatches(src) {
         break;
       }
     }
+
+    // 如果找不到可放的，就新增一批
     if (!placed) {
       batches.push({
         items: [{ ...chunk }],
