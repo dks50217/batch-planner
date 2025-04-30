@@ -202,24 +202,97 @@ function computeAndRenderBatches(){
 }
 
 // ---------------- 切批演算法 ----------------
-function splitIntoBatches(src){
-  const queue=src.map(o=>({...o}));
-  const batches=[];
-  class Batch{
-    constructor(){this.items=[];this.totalUnits=0;this.drugSkuSet=new Set();}
-    existingQty(c,n){const f=this.items.find(x=>x.category===c&&x.name===n);return f?f.qty:0;}
-    canAdd(c,n,a){if(this.existingQty(c,n)+a>SKU_LIMIT[c])return false;if(c==="drug"&&!this.drugSkuSet.has(n)&&this.drugSkuSet.size>=DRUG_SKU_PER_BATCH)return false;if(this.totalUnits+a>BATCH_TOTAL_LIMIT)return false;return true;}
-    add(c,n,a){const f=this.items.find(x=>x.category===c&&x.name===n);f?f.qty+=a:this.items.push({category:c,name:n,qty:a});if(c==="drug")this.drugSkuSet.add(n);this.totalUnits+=a;}
-  }
-  queue.forEach(it=>{
-    let rem=it.qty;const per=SKU_LIMIT[it.category];
-    while(rem>0){let chunk=Math.min(rem,per);let placed=false;
-      for(const b of batches){const allowed=Math.min(per-b.existingQty(it.category,it.name),BATCH_TOTAL_LIMIT-b.totalUnits,chunk);if(allowed>0&&b.canAdd(it.category,it.name,allowed)){b.add(it.category,it.name,allowed);rem-=allowed;placed=true;break;}}
-      if(!placed){const b=new Batch();const amt=Math.min(per,rem,BATCH_TOTAL_LIMIT);b.add(it.category,it.name,amt);batches.push(b);rem-=amt;}
+function splitIntoBatches(src) {
+
+  const chunks = [];
+
+  // 拆成 SKU 限制小段
+  for (const item of src) {
+    let qtyLeft = item.qty;
+    const max = SKU_LIMIT[item.category];
+    while (qtyLeft > 0) {
+      chunks.push({
+        category: item.category,
+        name: item.name,
+        qty: Math.min(max, qtyLeft)
+      });
+      qtyLeft -= max;
     }
-  });
+  }
+
+  // 於藥品類別，先做打散排序
+  const drugChunks = chunks.filter(c => c.category === "drug");
+  const supplementChunks = chunks.filter(c => c.category === "supplement");
+  const quasiChunks = chunks.filter(c => c.category === "quasi");
+
+  // 為藥品打散排序避免連續重複
+  drugChunks.sort((a, b) => a.name.localeCompare(b.name));
+  const interleavedDrugs = [];
+  const drugMap = new Map();
+  for (const d of drugChunks) {
+    if (!drugMap.has(d.name)) drugMap.set(d.name, []);
+    drugMap.get(d.name).push(d);
+  }
+  while (drugMap.size > 0) {
+    for (const [key, arr] of drugMap) {
+      interleavedDrugs.push(arr.shift());
+      if (arr.length === 0) drugMap.delete(key);
+    }
+  }
+
+  const finalChunks = [...interleavedDrugs, ...supplementChunks, ...quasiChunks];
+
+  const batches = [];
+
+  function canAddToBatch(batch, chunk) {
+    const { category, name, qty } = chunk;
+    if (batch.totalUnits + qty > BATCH_TOTAL_LIMIT) return false;
+    if (batch.category && batch.category !== category) return false;
+    if (category === "drug") {
+      const skuSet = new Set(batch.items.map(i => i.name));
+      const existing = batch.items.find(i => i.name === name);
+      if (!existing && skuSet.size >= DRUG_SKU_PER_BATCH) return false;
+      if (existing && existing.qty + qty > SKU_LIMIT[category]) return false;
+    } else {
+      const existing = batch.items.find(i => i.name === name);
+      if (existing && existing.qty + qty > SKU_LIMIT[category]) return false;
+    }
+    return true;
+  }
+
+  function addToBatch(batch, chunk) {
+    const existing = batch.items.find(i => i.name === chunk.name);
+    if (existing) {
+      existing.qty += chunk.qty;
+    } else {
+      batch.items.push({ ...chunk });
+    }
+    batch.totalUnits += chunk.qty;
+    if (!batch.category) batch.category = chunk.category;
+  }
+
+  // Step 3: 打包
+  for (const chunk of finalChunks) {
+    let placed = false;
+    for (const batch of batches) {
+      if (canAddToBatch(batch, chunk)) {
+        addToBatch(batch, chunk);
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      batches.push({
+        items: [{ ...chunk }],
+        totalUnits: chunk.qty,
+        category: chunk.category
+      });
+    }
+  }
+
   return batches;
 }
+
 </script>
 </body>
 </html>
