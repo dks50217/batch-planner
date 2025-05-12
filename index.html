@@ -76,7 +76,7 @@
         <li> 藥品：同款單批最多 2 件，一批最多包含 6 種藥品。</li>
         <li> 保健品：同款單批最多 12 件。</li>
         <li> 醫藥部外品：同款單批最多 10 件。</li>
-        <li> 每批最多包含 48 件商品，且藥品與保健品不可同時存在於同一批次。</li>
+        <!-- <li> 每批最多包含 48 件商品，且藥品與保健品不可同時存在於同一批次。</li> -->
       </ul>
     </div>
 
@@ -248,12 +248,12 @@ function splitIntoBatches(src) {
     if (batch.totalUnits + qty > BATCH_TOTAL_LIMIT) return false;
 
     // 分類限制：藥品不可與保健品同批
-    if (batch.category) {
+    /*if (batch.category) {
       if ((batch.category === "drug" && category === "supplement") ||
           (batch.category === "supplement" && category === "drug")) {
         return false;
       }
-    }
+    }*/
 
     const existing = batch.items.find(i => i.name === name);
 
