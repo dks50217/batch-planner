@@ -91,6 +91,14 @@
     <div id="batchResult">尚未輸入品項</div>
   </div>
 
+  <!-- Visualization -->
+  <div class="card" style="margin-top:2rem">
+    <h2>視覺化</h2>
+    <div id="batchVisualization" style="display: flex; flex-wrap: wrap; gap: 1rem;">
+      <div>尚未輸入品項</div>
+    </div>
+  </div>
+
 <script>
 // ---------------- 規則常數 ----------------
 const CATEGORY_LABEL = {drug:"藥品", supplement:"保健品", quasi:"醫藥部外品"};
@@ -189,16 +197,77 @@ function renderItemTable(){
   ).join("");
 }
 
-function computeAndRenderBatches(){
-  if(items.length===0){batchDiv.textContent="尚未輸入品項";currentBatches=[];return;}
-  currentBatches = splitIntoBatches(items);
-  let html="";
-  currentBatches.forEach((b,idx)=>{
-    html+=`<div class="batch-title">Batch #${idx+1} (共 ${b.totalUnits} 盒)</div><table><thead><tr><th>類別</th><th>名稱</th><th>數量</th></tr></thead><tbody>`;
-    b.items.forEach(it=>{html+=`<tr><td>${CATEGORY_LABEL[it.category]}</td><td>${it.name}</td><td>${it.qty}</td></tr>`;});
-    html+=`</tbody></table>`;
+
+function renderBatchVisualization() {
+  const container = document.getElementById("batchVisualization");
+  container.innerHTML = ""; // 清空內容
+
+  currentBatches.forEach((batch, idx) => {
+    const batchDiv = document.createElement("div");
+    batchDiv.style.border = "1px solid #ccc";
+    batchDiv.style.borderRadius = "8px";
+    batchDiv.style.padding = "1rem";
+    batchDiv.style.width = "150px";
+    batchDiv.style.textAlign = "center";
+    batchDiv.style.backgroundColor = "#f9f9f9";
+
+    const title = document.createElement("div");
+    title.textContent = `Batch #${idx + 1}`;
+    title.style.fontWeight = "bold";
+    title.style.marginBottom = "0.5rem";
+
+    const boxContainer = document.createElement("div");
+    boxContainer.style.display = "grid";
+    boxContainer.style.gridTemplateColumns = "repeat(auto-fill, 30px)";
+    boxContainer.style.gap = "5px";
+    boxContainer.style.justifyContent = "center";
+
+    batch.items.forEach(item => {
+      for (let i = 0; i < item.qty; i++) {
+        const box = document.createElement("div");
+        box.style.width = "30px";
+        box.style.height = "30px";
+        box.style.backgroundColor = getColorForCategory(item.category);
+        box.style.borderRadius = "4px";
+        box.title = `${item.name} (${CATEGORY_LABEL[item.category]})`;
+        boxContainer.appendChild(box);
+      }
+    });
+
+    batchDiv.appendChild(title);
+    batchDiv.appendChild(boxContainer);
+    container.appendChild(batchDiv);
   });
-  batchDiv.innerHTML=html;
+}
+
+// 根據類別生成顏色
+function getColorForCategory(category) {
+  const categoryColors = {
+    drug: "#ff9999",       // 藥品
+    supplement: "#99ccff", // 保健品
+    quasi: "#99ff99"       // 醫藥部外品
+  };
+  return categoryColors[category] || "#cccccc"; // 預設顏色為灰色
+}
+
+function computeAndRenderBatches() {
+  if (items.length === 0) {
+    batchDiv.textContent = "尚未輸入品項";
+    currentBatches = [];
+    renderBatchVisualization();
+    return;
+  }
+  currentBatches = splitIntoBatches(items);
+  let html = "";
+  currentBatches.forEach((b, idx) => {
+    html += `<div class="batch-title">Batch #${idx + 1} (共 ${b.totalUnits} 盒)</div><table><thead><tr><th>類別</th><th>名稱</th><th>數量</th></tr></thead><tbody>`;
+    b.items.forEach(it => {
+      html += `<tr><td>${CATEGORY_LABEL[it.category]}</td><td>${it.name}</td><td>${it.qty}</td></tr>`;
+    });
+    html += `</tbody></table>`;
+  });
+  batchDiv.innerHTML = html;
+  renderBatchVisualization();
 }
 
 // ---------------- 切批演算法 ----------------
