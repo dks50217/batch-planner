@@ -39,7 +39,7 @@
     <img src="https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png" alt="GitHub">
   </a>
 
-  <h1>Batch Planner 批次規劃器</h1>
+  <h1>Batch Planner 批次規劃器 (v2025.10.17.01)</h1>
 
   <div class="grid">
     <!-- 輸入卡片 -->
@@ -88,12 +88,12 @@
 
     <div class="card" style="grid-column:span 2">
       <strong>規則：</strong>
-      <ul style="margin:0;padding-left:1.5rem;">
-        <li> 藥品：同款單批最多 2 件，一批最多包含 6 種藥品。</li>
-        <li> 保健品：同款單批最多 12 件。</li>
-        <li> 醫藥部外品：同款單批最多 10 件。</li>
-        <li> 每批最多包含 48 件商品。</li>
-      </ul>
+     <ul style="margin:0;padding-left:1.5rem;">
+      <li>藥品：同款單批最多 2 件，一批最多包含 6 種藥品，且藥品總數最多 12 件。</li>
+      <li>保健品：同款單批最多 12 件，且保健品總數最多 36 件。</li>
+      <li>醫藥部外品：同款單批最多 10 件。</li>
+      <li>每批最多包含 48 件商品。</li>
+    </ul>
     </div>
 
   </div>
@@ -121,6 +121,8 @@ const CATEGORY_LABEL = {drug:"藥品", supplement:"保健品", quasi:"醫藥部�
 const SKU_LIMIT = {drug:2, supplement:12, quasi:10};
 const DRUG_SKU_PER_BATCH = 6;
 const BATCH_TOTAL_LIMIT = 48;
+// ✅ 新增：類別總量上限（單批）
+const CATEGORY_TOTAL_LIMIT = { drug: 12, supplement: 36 }; // quasi 無上限
 
 // ---------------- 狀態 ----------------
 const items = [];
@@ -184,7 +186,7 @@ btnExportBatches.addEventListener("click", ()=>{
 
 function downloadCSV(filename,rows){
   const csvBody = rows.map(r=>r.map(s=>`"${s}"`).join(",")).join("\n");
-  const csvContent = "\uFEFF" + csvBody; // UTF‑8 BOM 防亂碼
+  const csvContent = "\uFEFF" + csvBody; // UTF-8 BOM 防亂碼
   const blob = new Blob([csvContent],{type:"text/csv;charset=utf-8;"});
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
@@ -205,14 +207,12 @@ function randomProductName() {
   return `${year}${month}${day}${hour}${minute}${second}`;
 }
 
-
 // ---------------- UI Render ----------------
 function renderItemTable(){
   tbody.innerHTML = items.map((it,i)=>
     `<tr><td>${i+1}</td><td>${CATEGORY_LABEL[it.category]}</td><td>${it.name}</td><td>${it.qty}</td><td><button class="danger" data-index="${i}">刪除</button></td></tr>`
   ).join("");
 }
-
 
 function renderBatchVisualization() {
   const container = document.getElementById("batchVisualization");
@@ -290,7 +290,7 @@ function computeAndRenderBatches() {
 function splitIntoBatches(src) {
   const chunks = [];
 
-  // Step 1: 依單批 SKU 限制先拆分
+  // Step 1: 依同款上限先切塊
   for (const item of src) {
     let qtyLeft = item.qty;
     const max = SKU_LIMIT[item.category];
@@ -317,83 +317,99 @@ function splitIntoBatches(src) {
   }
   const interleavedDrugs = [];
   while (drugMap.size > 0) {
-    for (const [key, arr] of drugMap) {
+    for (const [_, arr] of drugMap) {
       interleavedDrugs.push(arr.shift());
-      if (arr.length === 0) drugMap.delete(key);
+      if (arr.length === 0) {
+        // 需刪除 key：重新找回該 key
+        for (const [k2, v2] of drugMap) {
+          if (v2.length === 0) { drugMap.delete(k2); break; }
+        }
+      }
     }
   }
 
-  const finalChunks = [...interleavedDrugs, ...supplementChunks, ...quasiChunks];
-  const batches = [];
-
+  // ---------------- 可放入檢查（含總量上限） ----------------
   function canAddToBatch(batch, chunk) {
     const { category, name, qty } = chunk;
 
-    // 批次數量上限
-    if (batch.totalUnits + qty > BATCH_TOTAL_LIMIT) return false;
+    // 批次總件數上限
+    if ((batch.totalUnits || 0) + qty > BATCH_TOTAL_LIMIT) return false;
 
-    // 分類限制：藥品不可與保健品同批
-    /*if (batch.category) {
-      if ((batch.category === "drug" && category === "supplement") ||
-          (batch.category === "supplement" && category === "drug")) {
-        return false;
-      }
-    }*/
+    // 類別總量上限（新規則）
+    if (CATEGORY_TOTAL_LIMIT[category] != null) {
+      const currentCatTotal = (batch.items || [])
+        .filter(i => i.category === category)
+        .reduce((sum, i) => sum + i.qty, 0);
+      if (currentCatTotal + qty > CATEGORY_TOTAL_LIMIT[category]) return false;
+    }
 
-    const existing = batch.items.find(i => i.name === name);
+    // 同款上限
+    const existing = (batch.items || []).find(i => i.name === name);
+    if (existing && existing.qty + qty > SKU_LIMIT[category]) return false;
+    if (!existing && qty > SKU_LIMIT[category]) return false;
 
-    // 藥品規則
+    // 藥品：單批最多 6 種
     if (category === "drug") {
-      const skuSet = new Set(batch.items.filter(i => i.category === "drug").map(i => i.name));
-      if (!existing && skuSet.size >= DRUG_SKU_PER_BATCH) return false;
-      if (existing && existing.qty + qty > SKU_LIMIT[category]) return false;
-      if (!existing && qty > SKU_LIMIT[category]) return false;
-    } else {
-      // 其他類別
-      if (existing && existing.qty + qty > SKU_LIMIT[category]) return false;
-      if (!existing && qty > SKU_LIMIT[category]) return false;
+      const drugSkuSet = new Set((batch.items || [])
+                            .filter(i => i.category === "drug")
+                            .map(i => i.name));
+      const isNewDrugSku = !existing && !drugSkuSet.has(name);
+      if (isNewDrugSku && drugSkuSet.size >= DRUG_SKU_PER_BATCH) return false;
     }
 
     return true;
   }
 
+  // ---------------- 批次操作 ----------------
+  const batches = [];
+
   function addToBatch(batch, chunk) {
     const existing = batch.items.find(i => i.name === chunk.name);
-    if (existing) {
-      existing.qty += chunk.qty;
-    } else {
-      batch.items.push({ ...chunk });
-    }
+    if (existing) existing.qty += chunk.qty;
+    else batch.items.push({ ...chunk });
     batch.totalUnits += chunk.qty;
-
-    // 設定類別為主分類（第一次加入）
     if (!batch.category) batch.category = chunk.category;
   }
 
-  // Step 3: 分批
-  for (const chunk of finalChunks) {
-    let placed = false;
+  function placeChunkFirstFit(chunk) {
     for (const batch of batches) {
-      if (canAddToBatch(batch, chunk)) {
-        addToBatch(batch, chunk);
-        placed = true;
-        break;
-      }
+      if (canAddToBatch(batch, chunk)) { addToBatch(batch, chunk); return; }
     }
+    // 找不到 -> 開新批
+    batches.push({ items: [{ ...chunk }], totalUnits: chunk.qty, category: chunk.category });
+  }
 
-    // 如果找不到可放的，就新增一批
-    if (!placed) {
-      batches.push({
-        items: [{ ...chunk }],
-        totalUnits: chunk.qty,
-        category: chunk.category
-      });
+  function categoryTotal(batch, cat) {
+    return batch.items.filter(i => i.category === cat).reduce((s, i) => s + i.qty, 0);
+  }
+
+  // 依「該類別目前最少」排序來放（均衡分流）
+  function placeChunksBalanced(chunks, cat) {
+    for (const c of chunks) {
+      // 先照該類別已放總數由少到多排列批次
+      const ordered = [...batches].sort((a, b) => categoryTotal(a, cat) - categoryTotal(b, cat));
+      let placed = false;
+      for (const batch of ordered) {
+        if (canAddToBatch(batch, c)) { addToBatch(batch, c); placed = true; break; }
+      }
+      if (!placed) {
+        // 仍無法放進既有批 -> 開新批
+        batches.push({ items: [{ ...c }], totalUnits: c.qty, category: c.category });
+      }
     }
   }
 
+  // Step 3: 先放藥品（維持 interleave + first-fit）
+  for (const d of interleavedDrugs) placeChunkFirstFit(d);
+
+  // Step 4: 保健品「均衡分流」到目前保健品最少的批次
+  placeChunksBalanced(supplementChunks, "supplement");
+
+  // Step 5: 醫藥部外品同樣均衡（若不想均衡可改回 placeChunkFirstFit）
+  placeChunksBalanced(quasiChunks, "quasi");
+
   return batches;
 }
-
 </script>
 </body>
 </html>
