@@ -39,7 +39,7 @@
     <img src="https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png" alt="GitHub">
   </a>
 
-  <h1>Batch Planner 批次規劃器 (v2025.10.17.01)</h1>
+  <h1>Batch Planner 批次規劃器 (v2025.10.17.02)</h1>
 
   <div class="grid">
     <!-- 輸入卡片 -->
@@ -53,8 +53,8 @@
         <option value="quasi">醫藥部外品</option>
       </select>
 
-      <label for="name">商品名稱</label>
-      <input id="product_name" type="text" placeholder="例如 A1" required />
+      <!-- <label for="name">商品名稱</label> -->
+      <input id="product_name" type="text" placeholder="例如 A1" hidden required />
 
       <label for="qty">數量 (盒/罐)</label>
       <input id="qty" type="number" min="1" step="1" placeholder="僅輸入數字" required />
@@ -65,8 +65,9 @@
       <div style="margin-top:1rem;font-size:0.9rem;color:#555;">
         <strong>備註：</strong>
         <ul style="margin:0;padding-left:1.5rem;">
-          <li>「WAKAMOTO 若元錠 / わかもと」是藥品</li>
-          <li>「朝日 ASAHI 愛表斯錠 Ebios エビオス錠」是藥品</li>
+          <li>「WAKAMOTO 若元錠 / わかもと」是保健品 (12)</li>
+          <li>「朝日 ASAHI 愛表斯錠 Ebios エビオス錠」是保健品 (12)</li>
+          <li> 混搭48 = 藥12 + 保健品36</li>
         </ul>
       </div>
 
@@ -80,7 +81,7 @@
       </div>
       <table id="itemTable">
         <thead>
-          <tr><th>#</th><th>類別</th><th>名稱</th><th>數量</th><th>操作</th></tr>
+          <tr><th>#</th><th>類別</th><th>數量</th><th>操作</th></tr>
         </thead>
         <tbody></tbody>
       </table>
@@ -210,7 +211,7 @@ function randomProductName() {
 // ---------------- UI Render ----------------
 function renderItemTable(){
   tbody.innerHTML = items.map((it,i)=>
-    `<tr><td>${i+1}</td><td>${CATEGORY_LABEL[it.category]}</td><td>${it.name}</td><td>${it.qty}</td><td><button class="danger" data-index="${i}">刪除</button></td></tr>`
+    `<tr><td>${i+1}</td><td>${CATEGORY_LABEL[it.category]}</td><td>${it.qty}</td><td><button class="danger" data-index="${i}">刪除</button></td></tr>`
   ).join("");
 }
 
