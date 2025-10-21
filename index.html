@@ -39,7 +39,7 @@
     <img src="https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png" alt="GitHub">
   </a>
 
-  <h1>Batch Planner 批次規劃器 (v2025.10.17.02)</h1>
+  <h1>Batch Planner 批次規劃器 (v2025.10.17.03)</h1>
 
   <div class="grid">
     <!-- 輸入卡片 -->
@@ -101,10 +101,13 @@
 
   <!-- 分批結果 -->
   <div class="card" style="margin-top:2rem">
-   <div style="display: flex; justify-content: space-between; align-items: center;">
-        <h2>分批結果</h2>
-        <button id="exportBatches" class="secondary">匯出分批 CSV</button> 
-   </div>
+    <div style="display: flex; justify-content: space-between; align-items: center; gap:.5rem; flex-wrap:wrap">
+      <h2>分批結果</h2>
+      <div style="display:flex; gap:.5rem;">
+        <button id="optimizeBtn" class="primary" title="嘗試在不違反規則下，最小化批次數">求最佳解（Beta）</button>
+        <button id="exportBatches" class="secondary">匯出分批 CSV</button> 
+      </div>
+    </div>
     <div id="batchResult">尚未輸入品項</div>
   </div>
 
@@ -275,16 +278,7 @@ function computeAndRenderBatches() {
     return;
   }
   currentBatches = splitIntoBatches(items);
-  let html = "";
-  currentBatches.forEach((b, idx) => {
-    html += `<div class="batch-title">Batch #${idx + 1} (共 ${b.totalUnits} 盒)</div><table><thead><tr><th>類別</th><th>名稱</th><th>數量</th></tr></thead><tbody>`;
-    b.items.forEach(it => {
-      html += `<tr><td>${CATEGORY_LABEL[it.category]}</td><td>${it.name}</td><td>${it.qty}</td></tr>`;
-    });
-    html += `</tbody></table>`;
-  });
-  batchDiv.innerHTML = html;
-  renderBatchVisualization();
+  updateBatchUI();
 }
 
 // ---------------- 切批演算法 ----------------
@@ -411,6 +405,207 @@ function splitIntoBatches(src) {
 
   return batches;
 }
+
+// ===================== 求最佳解（局部搜尋） =====================
+const deepClone = obj => JSON.parse(JSON.stringify(obj));
+
+function canAddToBatch(batch, chunk) {
+  const { category, name, qty } = chunk;
+
+  // 總件數上限 48
+  if ((batch.totalUnits || 0) + qty > BATCH_TOTAL_LIMIT) return false;
+
+  // 類別總量上限
+  if (CATEGORY_TOTAL_LIMIT[category] != null) {
+    const currentCatTotal = (batch.items || [])
+      .filter(i => i.category === category)
+      .reduce((sum, i) => sum + i.qty, 0);
+    if (currentCatTotal + qty > CATEGORY_TOTAL_LIMIT[category]) return false;
+  }
+
+  // 同款上限
+  const existing = (batch.items || []).find(i => i.name === name);
+  if (existing && existing.qty + qty > SKU_LIMIT[category]) return false;
+  if (!existing && qty > SKU_LIMIT[category]) return false;
+
+  // 藥品：單批最多 6 種
+  if (category === "drug") {
+    const drugSkuSet = new Set((batch.items || [])
+      .filter(i => i.category === "drug")
+      .map(i => i.name));
+    const isNewDrugSku = !existing && !drugSkuSet.has(name);
+    if (isNewDrugSku && drugSkuSet.size >= DRUG_SKU_PER_BATCH) return false;
+  }
+
+  return true;
+}
+
+function addToBatch(batch, chunk) {
+  const existing = batch.items.find(i => i.name === chunk.name);
+  if (existing) existing.qty += chunk.qty;
+  else batch.items.push({ ...chunk });
+  batch.totalUnits += chunk.qty;
+}
+
+function tryAbsorbAll(dst, src) {
+  // 模擬：檢查 src 所有 item 是否可整批吸收至 dst
+  const test = deepClone(dst);
+  for (const it of src.items) {
+    if (!canAddToBatch(test, it)) return false;
+    addToBatch(test, it);
+  }
+  return true;
+}
+
+function applyAbsorbAll(dst, src) {
+  for (const it of src.items) addToBatch(dst, it);
+}
+
+function tryEmptyBatch(batches, idx) {
+  // 嘗試把第 idx 個批次的 items 搬到其他批次，若成功回傳新陣列
+  const candidate = deepClone(batches);
+  const donor = candidate[idx];
+  const othersIdx = [...candidate.keys()].filter(k => k !== idx);
+
+  // 先照能放入 donor 之類別最少的批次排序（較容易塞進去）
+  othersIdx.sort((a, b) => candidate[a].totalUnits - candidate[b].totalUnits);
+
+  const itemsSorted = [...donor.items].sort((a,b)=>b.qty-a.qty); // 大件先搬
+
+  for (const it of itemsSorted) {
+    let placed = false;
+    for (const j of othersIdx) {
+      if (canAddToBatch(candidate[j], it)) { addToBatch(candidate[j], it); placed = true; break; }
+    }
+    if (!placed) return null; // 某件搬不走 -> 失敗
+  }
+
+  candidate.splice(idx, 1); // 成功清空
+  return candidate;
+}
+
+function trySwaps(batches, attempts = 200) {
+  // 嘗試隨機交換兩個批次間的部分塊，若能讓某一批可被清空，則採用
+  const n = batches.length;
+  if (n < 2) return null;
+  for (let t = 0; t < attempts; t++) {
+    const i = Math.floor(Math.random() * n);
+    let j = Math.floor(Math.random() * n);
+    if (i === j) j = (j + 1) % n;
+
+    const A = deepClone(batches[i]);
+    const B = deepClone(batches[j]);
+
+    // 從 A 挑一個塊給 B、從 B 挑一個塊給 A（小隨機）
+    const aItem = A.items[Math.floor(Math.random() * A.items.length)];
+    const bItem = B.items[Math.floor(Math.random() * B.items.length)];
+
+    // 試著交換（需先扣回總數，模擬後再加）
+    const A2 = deepClone(A), B2 = deepClone(B);
+    // 從 A2 移走 aItem
+    A2.items = A2.items.filter(x => !(x.name === aItem.name && x.qty === aItem.qty && x.category === aItem.category));
+    A2.totalUnits -= aItem.qty;
+    // 從 B2 移走 bItem
+    B2.items = B2.items.filter(x => !(x.name === bItem.name && x.qty === bItem.qty && x.category === bItem.category));
+    B2.totalUnits -= bItem.qty;
+
+    if (canAddToBatch(A2, bItem) && canAddToBatch(B2, aItem)) {
+      addToBatch(A2, bItem);
+      addToBatch(B2, aItem);
+
+      // 用交換後的 A2/B2 構建新解，看看是否能清空某一批
+      const candidate = deepClone(batches);
+      candidate[i] = A2; candidate[j] = B2;
+
+      // 先嘗試直接吸收/清空
+      for (let k = 0; k < candidate.length; k++) {
+        const merged = tryEmptyBatch(candidate, k);
+        if (merged) return merged;
+      }
+    }
+  }
+  return null;
+}
+
+function optimizeBatches(srcItems) {
+  // 1) 初解：沿用你現有的切批
+  let best = splitIntoBatches(srcItems);
+
+  let improved = true;
+  while (improved) {
+    improved = false;
+
+    // 2) 直接吸收合併（整批塞進另一批）
+    outer:
+    for (let i = 0; i < best.length; i++) {
+      for (let j = 0; j < best.length; j++) {
+        if (i === j) continue;
+        if (tryAbsorbAll(best[j], best[i])) {
+          const nb = deepClone(best);
+          applyAbsorbAll(nb[j], nb[i]);
+          nb.splice(i, 1);
+          best = nb;
+          improved = true;
+          break outer;
+        }
+      }
+    }
+    if (improved) continue;
+
+    // 3) 針對「件數最少的批次」嘗試整批清空
+    const order = best.map((b, idx) => ({ idx, units: b.totalUnits }))
+                      .sort((a, b) => a.units - b.units);
+    for (const { idx } of order) {
+      const nb = tryEmptyBatch(best, idx);
+      if (nb) { best = nb; improved = true; break; }
+    }
+    if (improved) continue;
+
+    // 4) 嘗試隨機交換以創造可清空的空間
+    const swapped = trySwaps(best, 240);
+    if (swapped) { best = swapped; improved = true; continue; }
+  }
+
+  return best;
+}
+
+// 事件：按下「求最佳解」
+const btnOptimize = document.getElementById("optimizeBtn");
+btnOptimize.addEventListener("click", () => {
+  if (items.length === 0) { alert("尚未輸入品項"); return; }
+  btnOptimize.disabled = true;
+  const oldText = btnOptimize.textContent;
+  btnOptimize.textContent = "最佳化中…";
+  // 讓 UI 先刷新再執行（避免卡頓無反饋）
+  setTimeout(() => {
+    currentBatches = optimizeBatches(items);
+    updateBatchUI();
+    btnOptimize.disabled = false;
+    btnOptimize.textContent = oldText;
+  }, 0);
+});
+
+function updateBatchUI() {
+  if (!currentBatches || currentBatches.length === 0) {
+    batchDiv.textContent = "尚未輸入品項";
+    renderBatchVisualization();
+    return;
+  }
+  let html = "";
+  currentBatches.forEach((b, idx) => {
+    html += `<div class="batch-title">Batch #${idx + 1} (共 ${b.totalUnits} 盒)</div>
+             <table><thead><tr><th>類別</th><th>名稱</th><th>數量</th></tr></thead><tbody>`;
+    b.items.forEach(it => {
+      html += `<tr><td>${CATEGORY_LABEL[it.category]}</td><td>${it.name}</td><td>${it.qty}</td></tr>`;
+    });
+    html += `</tbody></table>`;
+  });
+  batchDiv.innerHTML = html;
+  renderBatchVisualization();
+}
+
+
+
 </script>
 </body>
 </html>
